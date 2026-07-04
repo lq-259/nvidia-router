@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import time
 import threading
@@ -80,8 +81,15 @@ async def _probe_one(
         "messages": [{"role": "user", "content": sample_msg}],
         "max_tokens": 1,
     }
+    # Turn off thinking for probe — faster, save tokens
     if model.extra_body:
-        request_body = {**request_body, **model.extra_body}
+        probe_extra = copy.deepcopy(model.extra_body)
+        if "chat_template_kwargs" in probe_extra:
+            probe_extra["chat_template_kwargs"] = {
+                **probe_extra["chat_template_kwargs"],
+                "thinking": False,
+            }
+        request_body = {**request_body, **probe_extra}
 
     start = time.monotonic()
     try:
@@ -181,7 +189,7 @@ async def route_chat(
                     winner, probe_lat = result[0], result[1]
                     ranked.append((winner, probe_lat))
 
-            if ranked and not pending:
+            if not ranked and not pending:
                 raise RouteError("All models failed to respond to probe")
 
             if not ranked:
@@ -212,8 +220,7 @@ async def route_chat(
                 pending.discard(full_task)
             else:
                 # Another probe finished before full request completed
-                full_task.cancel()
-                pending.discard(full_task)
+                new_probes = False
                 for task in full_done:
                     try:
                         result = task.result()
@@ -221,7 +228,14 @@ async def route_chat(
                         continue
                     if isinstance(result, tuple) and result[1] is not None:
                         ranked.append((result[0], result[1]))
-                ranked.sort(key=lambda x: x[1])
+                        new_probes = True
+                if new_probes:
+                    full_task.cancel()
+                    pending.discard(full_task)
+                    ranked.sort(key=lambda x: x[1])
+                else:
+                    # Only failed probes completed, keep waiting for full request
+                    pending.add(full_task)
 
             if not pending and not ranked:
                 raise RouteError("All models failed to respond to probe")
