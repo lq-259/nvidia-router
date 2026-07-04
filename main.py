@@ -1,6 +1,6 @@
 import json
 import uuid
-from typing import Optional
+from typing import Optional, Union, Any
 
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -25,7 +25,7 @@ def verify_key(credentials: Optional[HTTPAuthorizationCredentials] = Depends(sec
 
 class ChatMessage(BaseModel):
     role: str
-    content: str
+    content: Union[str, list[dict[str, Any]], None] = None
 
 
 class ChatRequest(BaseModel):
