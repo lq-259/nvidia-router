@@ -370,8 +370,6 @@ async def _stream_from_model(
                 async for line in resp.aiter_lines():
                     for result in normalizer.feed(line):
                         yield result
-                for result in normalizer.feed("data: [DONE]"):
-                    yield result
             else:
                 yield f"data: {json.dumps({'error': f'{model.name}:{resp.status_code}'})}\n\n"
                 yield "data: [DONE]\n\n"

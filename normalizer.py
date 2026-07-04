@@ -167,6 +167,10 @@ class StreamNormalizer:
                 return self._make_sse(data) if delta else [""]
             return self._make_sse(data)
 
+        # Pass through tool_calls / function_call without buffering
+        if "tool_calls" in delta or "function_call" in delta:
+            return self._make_sse(data)
+
         if content is None:
             return self._make_sse(data)
 
