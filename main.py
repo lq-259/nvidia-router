@@ -39,6 +39,8 @@ class ChatRequest(BaseModel):
         default=None,
         description="Sticky session ID. Same ID gets same model on success.",
     )
+    tools: Optional[list[dict[str, Any]]] = None
+    tool_choice: Any = None
 
 
 @app.get("/health")
@@ -54,6 +56,10 @@ async def chat_completions(req: ChatRequest, _=Depends(verify_key)):
         "max_tokens": req.max_tokens,
         "top_p": req.top_p,
     }
+    if req.tools is not None:
+        body["tools"] = req.tools
+    if req.tool_choice is not None:
+        body["tool_choice"] = req.tool_choice
 
     session_id = req.session_id
     thinking_mode = ThinkingMode(config.thinking_mode)
