@@ -232,6 +232,7 @@ async def route_chat(
                 if new_probes:
                     full_task.cancel()
                     pending.discard(full_task)
+                    ranked = [(m, float(t)) for m, t in ranked]
                     ranked.sort(key=lambda x: x[1])
                 else:
                     # Only failed probes completed, keep waiting for full request
@@ -244,6 +245,10 @@ async def route_chat(
     errors: list[str] = []
     async with httpx.AsyncClient() as client:
         for model, probe_lat in ranked:
+            try:
+                probe_lat = float(probe_lat)
+            except (TypeError, ValueError):
+                probe_lat = 0.0
             resp, err = await _try_single(client, model, body)
             if resp is not None:
                 if session_id:
