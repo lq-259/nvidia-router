@@ -138,7 +138,7 @@ class StreamNormalizer:
                 self._finished = True
                 flushed = self._flush_buffer()
                 if flushed:
-                    return flushed
+                    return flushed + [line]
                 return [line]
 
             try:
