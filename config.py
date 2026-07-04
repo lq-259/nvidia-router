@@ -26,6 +26,7 @@ class Config:
     api_keys: list[str] = field(default_factory=lambda: _load_api_keys())
     models: list[str] = field(default_factory=lambda: _load_models())
     timeout: float = float(os.getenv("REQUEST_TIMEOUT", "30"))
+    full_timeout: float = float(os.getenv("FULL_REQUEST_TIMEOUT", "30"))
     sticky_ttl: int = int(os.getenv("STICKY_TTL", "300"))
     max_retries: int = int(os.getenv("MAX_RETRIES", "0"))
     max_concurrent: int = int(os.getenv("MAX_CONCURRENT", "10"))

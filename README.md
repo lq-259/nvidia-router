@@ -31,7 +31,8 @@ docker compose up -d
 |---|---|---|
 | `NVIDIA_API_KEYS` | API Key，逗号分隔，轮询使用 | 必填 |
 | `NVIDIA_MODELS` | 模型列表，逗号分隔，越前越优先 | 8 个免费模型 |
-| `REQUEST_TIMEOUT` | 单次请求超时（秒） | 30 |
+| `REQUEST_TIMEOUT` | 探针超时（秒） | 2 |
+| `FULL_REQUEST_TIMEOUT` | 完整请求超时（秒） | 30 |
 | `STICKY_TTL` | 粘性会话有效期（秒） | 300 |
 | `THINKING_MODE` | normalize / strip / passthrough | normalize |
 | `AUTH_API_KEY` | 本服务鉴权 Key，留空不鉴权 | 空 |
@@ -101,9 +102,11 @@ print(response.choices[0].message.content)
 ## 路由逻辑
 
 ```
-请求 → 粘性会话命中？ → 优先用上次成功的模型
+请求 → 粘性会话命中？ → 直接请求上次成功的模型
        ↓ 失败
-       按列表顺序尝试 → 超时/429 → 跳过 → 下一个
+       并发探针所有模型（max_tokens=1）→ 谁先响应 → 发完整请求
+       ↓ 失败
+       按探针速度顺序 fallback → 下一个
        ↓ 成功
        更新粘性缓存 → 归一化 thinking → 返回
 ```

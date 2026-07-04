@@ -1,7 +1,7 @@
 import asyncio
+import json
 import time
 import threading
-from collections import OrderedDict
 from typing import AsyncIterator, Optional
 
 import httpx
@@ -15,7 +15,6 @@ KEY_RR_LOCK = threading.Lock()
 
 
 def _clean_expired():
-    """Remove expired sticky entries."""
     now = time.time()
     with STICKY_LOCK:
         expired = [k for k, (_, ts) in STICKY_CACHE.items() if now - ts > config.sticky_ttl]
@@ -24,7 +23,6 @@ def _clean_expired():
 
 
 def get_sticky(session_id: str) -> Optional[str]:
-    """Return the sticky model name for a session, or None."""
     _clean_expired()
     with STICKY_LOCK:
         entry = STICKY_CACHE.get(session_id)
@@ -41,12 +39,8 @@ def set_sticky(session_id: str, model_name: str):
         STICKY_CACHE[session_id] = (model_name, time.time())
 
 
-def _build_ordered_models(sticky: Optional[str]) -> list[Model]:
-    """Return models in the order they should be tried.
-
-    If a sticky model exists, it goes first; the rest follow in default order.
-    API keys are round-robined: each request starts from the next key in rotation.
-    """
+def _build_probe_models(sticky: Optional[str]) -> list[Model]:
+    """Assign one round-robin key to each model for probing."""
     api_keys = config.api_keys
     if not api_keys:
         raise RuntimeError("NVIDIA_API_KEYS is not configured")
@@ -56,14 +50,11 @@ def _build_ordered_models(sticky: Optional[str]) -> list[Model]:
         start_idx = KEY_ROUND_ROBIN % len(api_keys)
         KEY_ROUND_ROBIN += 1
 
-    # Rotate keys so the round-robin key comes first
-    rotated_keys = api_keys[start_idx:] + api_keys[:start_idx]
-
     models = []
-    for model_name in config.models:
+    for i, model_name in enumerate(config.models):
+        key = api_keys[(start_idx + i) % len(api_keys)]
         extra = MODEL_EXTRA.get(model_name, {})
-        for key in rotated_keys:
-            models.append(Model(name=model_name, api_key=key, extra_body=extra))
+        models.append(Model(name=model_name, api_key=key, extra_body=extra))
 
     if sticky:
         sticky_models = [m for m in models if m.name == sticky]
@@ -73,13 +64,45 @@ def _build_ordered_models(sticky: Optional[str]) -> list[Model]:
     return models
 
 
-def _is_retryable(status: int) -> bool:
-    return status in (429, 500, 502, 503, 504)
-
-
 def _is_fatal(status: int) -> bool:
-    """Status codes that mean this model should be skipped permanently this request."""
     return status in (429, 503)
+
+
+async def _probe_one(
+    client: httpx.AsyncClient,
+    model: Model,
+    sample_msg: str,
+) -> tuple[Model, Optional[float], Optional[str]]:
+    """Send a lightweight probe. Returns (model, latency_seconds, error)."""
+    url = f"{model.base_url}/chat/completions"
+    request_body = {
+        "model": model.model_id,
+        "messages": [{"role": "user", "content": sample_msg}],
+        "max_tokens": 1,
+    }
+    if model.extra_body:
+        request_body = {**request_body, **model.extra_body}
+
+    start = time.monotonic()
+    try:
+        resp = await client.post(
+            url,
+            json=request_body,
+            headers={
+                "Authorization": f"Bearer {model.api_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=httpx.Timeout(config.timeout, connect=5.0),
+        )
+        latency = time.monotonic() - start
+        if resp.status_code == 200:
+            return model, latency, None
+        else:
+            return model, None, f"{resp.status_code}"
+    except httpx.TimeoutException:
+        return model, None, "timeout"
+    except Exception as e:
+        return model, None, type(e).__name__
 
 
 async def _try_single(
@@ -87,13 +110,10 @@ async def _try_single(
     model: Model,
     body: dict,
 ) -> tuple[Optional[dict], Optional[str]]:
-    """Try a single model. Returns (response_json, error_reason)."""
     url = f"{model.base_url}/chat/completions"
-
     request_body = {**body, "model": model.model_id}
     if "stream" in request_body:
         request_body.pop("stream")
-
     if model.extra_body:
         request_body = {**request_body, **model.extra_body}
 
@@ -105,16 +125,14 @@ async def _try_single(
                 "Authorization": f"Bearer {model.api_key}",
                 "Content-Type": "application/json",
             },
-            timeout=httpx.Timeout(config.timeout, connect=10.0),
+            timeout=httpx.Timeout(config.full_timeout, connect=10.0),
         )
-
         if resp.status_code == 200:
             return resp.json(), None
         elif _is_fatal(resp.status_code):
             return None, f"{model.name}:{resp.status_code}"
         else:
             return None, f"{model.name}:{resp.status_code}({resp.text[:200]})"
-
     except httpx.TimeoutException:
         return None, f"{model.name}:timeout"
     except Exception as e:
@@ -126,38 +144,111 @@ async def route_chat(
     session_id: Optional[str] = None,
     thinking_mode: ThinkingMode = ThinkingMode.normalize,
 ) -> dict:
-    """Route a chat completion request through the model list.
+    """Route via concurrent probe + full request.
 
-    Strategy:
-    1. If session_id is provided, try the sticky model first.
-    2. Fall through the remaining models in order.
-    3. On first success, update sticky cache and return.
-    4. Normalize thinking/reasoning content for consistency.
+    1. Sticky session hit → try that model directly (no probe).
+    2. Race all probes concurrently. First to respond wins → full request.
+    3. Full request fails → try next fastest probe, then rest.
     """
     sticky = get_sticky(session_id) if session_id else None
-    models = _build_ordered_models(sticky)
-
-    fatal_models: set[str] = set()
-    errors: list[str] = []
+    probe_models = _build_probe_models(sticky)
+    sample_msg = _extract_sample(body)
 
     async with httpx.AsyncClient() as client:
-        for model in models:
-            if model.name in fatal_models:
+        if sticky:
+            resp, err = await _try_single(client, probe_models[0], body)
+            if resp is not None:
+                return normalize_response(resp, thinking_mode)
+
+        # Phase 1: Race probes, first to respond gets full request
+        probe_tasks = {
+            asyncio.create_task(_probe_one(client, m, sample_msg)): m
+            for m in probe_models
+        }
+        ranked: list[tuple[Model, float]] = []
+        pending = set(probe_tasks.keys())
+
+        while pending:
+            done, pending = await asyncio.wait(
+                pending, return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in done:
+                try:
+                    result = task.result()
+                except Exception:
+                    continue
+                if isinstance(result, tuple) and result[1] is not None:
+                    winner, probe_lat = result[0], result[1]
+                    ranked.append((winner, probe_lat))
+
+            if ranked and not pending:
+                raise RouteError("All models failed to respond to probe")
+
+            if not ranked:
                 continue
 
-            resp, err = await _try_single(client, model, body)
+            # Try full request to the fastest probe, racing against remaining probes
+            winner, probe_lat = ranked[0]
+            full_task = asyncio.create_task(_try_single(client, winner, body))
 
+            full_done, pending = await asyncio.wait(
+                pending | {full_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            if full_task in full_done:
+                try:
+                    resp, err = full_task.result()
+                except Exception:
+                    resp, err = None, "exception"
+                if resp is not None:
+                    for t in pending:
+                        t.cancel()
+                    if session_id:
+                        set_sticky(session_id, winner.name)
+                    return normalize_response(resp, thinking_mode)
+                # Full request failed, remove from ranked
+                ranked.pop(0)
+                pending.discard(full_task)
+            else:
+                # Another probe finished before full request completed
+                full_task.cancel()
+                pending.discard(full_task)
+                for task in full_done:
+                    try:
+                        result = task.result()
+                    except Exception:
+                        continue
+                    if isinstance(result, tuple) and result[1] is not None:
+                        ranked.append((result[0], result[1]))
+                ranked.sort(key=lambda x: x[1])
+
+            if not pending and not ranked:
+                raise RouteError("All models failed to respond to probe")
+
+    # Phase 2: Fallback — try remaining probes in speed order
+    errors: list[str] = []
+    async with httpx.AsyncClient() as client:
+        for model, probe_lat in ranked:
+            resp, err = await _try_single(client, model, body)
             if resp is not None:
                 if session_id:
                     set_sticky(session_id, model.name)
                 return normalize_response(resp, thinking_mode)
-
             if err:
-                errors.append(err)
-                if "429" in err or "503" in err:
-                    fatal_models.add(model.name)
+                errors.append(f"{model.name}({probe_lat:.1f}s):{err}")
 
     raise RouteError(f"All models failed: {'; '.join(errors)}")
+
+
+def _extract_sample(body: dict) -> str:
+    msgs = body.get("messages", [])
+    for m in reversed(msgs):
+        if m.get("role") == "user":
+            content = m.get("content", "hi")
+            if isinstance(content, str):
+                return content[:100]
+    return "hi"
 
 
 async def route_chat_stream(
@@ -165,57 +256,109 @@ async def route_chat_stream(
     session_id: Optional[str] = None,
     thinking_mode: ThinkingMode = ThinkingMode.normalize,
 ) -> AsyncIterator[str]:
-    """Streaming version: yields normalized SSE chunks from the first successful model.
-
-    Uses StreamNormalizer to unify thinking content across different models.
-    """
+    """Streaming version: probe first, then stream from fastest model."""
     sticky = get_sticky(session_id) if session_id else None
-    models = _build_ordered_models(sticky)
-
-    fatal_models: set[str] = set()
-    errors: list[str] = []
+    probe_models = _build_probe_models(sticky)
+    sample_msg = _extract_sample(body)
 
     async with httpx.AsyncClient() as client:
-        for model in models:
-            if model.name in fatal_models:
+        if sticky:
+            async for chunk in _stream_from_model(client, probe_models[0], body, session_id, thinking_mode):
+                yield chunk
+            return
+
+        probe_tasks = {
+            asyncio.create_task(_probe_one(client, m, sample_msg)): m
+            for m in probe_models
+        }
+        ranked: list[tuple[Model, float]] = []
+        pending = set(probe_tasks.keys())
+
+        while pending:
+            done, pending = await asyncio.wait(
+                pending, return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in done:
+                try:
+                    result = task.result()
+                except Exception:
+                    continue
+                if isinstance(result, tuple) and result[1] is not None:
+                    ranked.append((result[0], result[1]))
+
+            if not ranked:
                 continue
 
-            url = f"{model.base_url}/chat/completions"
-            request_body = {**body, "model": model.model_id, "stream": True}
-            if model.extra_body:
-                request_body = {**request_body, **model.extra_body}
+            if not pending and not ranked:
+                yield f"data: {json.dumps({'error': 'All models failed to respond to probe'})}\n\n"
+                yield "data: [DONE]\n\n"
+                return
 
-            try:
-                async with client.stream(
-                    "POST",
-                    url,
-                    json=request_body,
-                    headers={
-                        "Authorization": f"Bearer {model.api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    timeout=httpx.Timeout(config.timeout, connect=10.0),
-                ) as resp:
-                    if resp.status_code == 200:
-                        if session_id:
-                            set_sticky(session_id, model.name)
-                        normalizer = StreamNormalizer(thinking_mode)
-                        async for line in resp.aiter_lines():
-                            for result in normalizer.feed(line):
-                                yield result
-                        for result in normalizer.feed("data: [DONE]"):
-                            yield result
-                        return
-                    elif _is_fatal(resp.status_code):
-                        fatal_models.add(model.name)
-                        errors.append(f"{model.name}:{resp.status_code}")
-                    else:
-                        errors.append(f"{model.name}:{resp.status_code}")
+            winner, probe_lat = ranked[0]
+            async for chunk in _stream_from_model(client, winner, body, session_id, thinking_mode):
+                yield chunk
+            return
 
-            except (httpx.TimeoutException, Exception) as e:
-                errors.append(f"{model.name}:{type(e).__name__}")
+        if not ranked:
+            yield f"data: {json.dumps({'error': 'All models failed to respond to probe'})}\n\n"
+            yield "data: [DONE]\n\n"
+            return
 
-    raise RouteError(f"All models failed: {'; '.join(errors)}")
+        errors: list[str] = []
+        for model, probe_lat in ranked:
+            success = False
+            async for chunk in _stream_from_model(client, model, body, session_id, thinking_mode):
+                if chunk.startswith("data:") and '"error"' in chunk:
+                    errors.append(f"{model.name}({probe_lat:.1f}s)")
+                else:
+                    success = True
+                yield chunk
+            if success:
+                return
+
+        errors_str = "; ".join(errors)
+        yield f"data: {json.dumps({'error': f'All models failed: {errors_str}'})}\n\n"
+        yield "data: [DONE]\n\n"
+
+
+async def _stream_from_model(
+    client: httpx.AsyncClient,
+    model: Model,
+    body: dict,
+    session_id: Optional[str],
+    thinking_mode: ThinkingMode,
+) -> AsyncIterator[str]:
+    url = f"{model.base_url}/chat/completions"
+    request_body = {**body, "model": model.model_id, "stream": True}
+    if model.extra_body:
+        request_body = {**request_body, **model.extra_body}
+
+    try:
+        async with client.stream(
+            "POST",
+            url,
+            json=request_body,
+            headers={
+                "Authorization": f"Bearer {model.api_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=httpx.Timeout(config.full_timeout, connect=10.0),
+        ) as resp:
+            if resp.status_code == 200:
+                if session_id:
+                    set_sticky(session_id, model.name)
+                normalizer = StreamNormalizer(thinking_mode)
+                async for line in resp.aiter_lines():
+                    for result in normalizer.feed(line):
+                        yield result
+                for result in normalizer.feed("data: [DONE]"):
+                    yield result
+            else:
+                yield f"data: {json.dumps({'error': f'{model.name}:{resp.status_code}'})}\n\n"
+                yield "data: [DONE]\n\n"
+    except (httpx.TimeoutException, Exception) as e:
+        yield f"data: {json.dumps({'error': f'{model.name}:{type(e).__name__}'})}\n\n"
+        yield "data: [DONE]\n\n"
 
 
 class RouteError(Exception):
