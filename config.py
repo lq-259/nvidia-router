@@ -58,10 +58,10 @@ DEFAULT_MODELS = [
 
 MODEL_EXTRA = {
     "deepseek-ai/deepseek-v4-flash": {
-        "chat_template_kwargs": {"thinking": True, "reasoning_effort": "high"}
+        "chat_template_kwargs": {"thinking": True, "reasoning_effort": "max"}
     },
     "deepseek-ai/deepseek-v4-pro": {
-        "chat_template_kwargs": {"thinking": True, "reasoning_effort": "high"}
+        "chat_template_kwargs": {"thinking": True, "reasoning_effort": "max"}
     },
     "moonshotai/kimi-k2.6": {
         "chat_template_kwargs": {"thinking": True}
