@@ -436,6 +436,10 @@ async def _stream_from_model(
     request_body["messages"] = _sanitize_messages(request_body.get("messages", []))
 
     logger.info(f"Streaming from {model.name} key={model.api_key[:12]}...")
+    if "tools" in request_body:
+        logger.info(f"  tools={len(request_body['tools'])} functions, tool_choice={request_body.get('tool_choice', 'not set')}")
+    else:
+        logger.info(f"  NO tools in request")
 
     try:
         async with client.stream(
