@@ -18,9 +18,11 @@ app = FastAPI(title="NVIDIA Model Router", version="1.0.0")
 security = HTTPBearer(auto_error=False)
 
 logging.basicConfig(
-    level=logging.DEBUG if config.debug else logging.WARNING,
+    level=logging.WARNING,
     format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
 )
+if config.debug:
+    logging.getLogger("nvidia-router").setLevel(logging.DEBUG)
 
 
 def verify_key(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)):
