@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import json
+import logging
 import time
 import threading
 from typing import AsyncIterator, Optional
@@ -8,6 +9,8 @@ from typing import AsyncIterator, Optional
 import httpx
 from config import config, Model, MODEL_EXTRA
 from normalizer import ThinkingMode, normalize_response, StreamNormalizer
+
+logger = logging.getLogger("nvidia-router")
 
 STICKY_CACHE: dict[str, tuple[str, float]] = {}
 STICKY_LOCK = threading.Lock()
@@ -150,13 +153,11 @@ async def route_chat(
     session_id: Optional[str] = None,
     thinking_mode: ThinkingMode = ThinkingMode.normalize,
 ) -> dict:
-    """Route via concurrent probe + full request.
-
-    1. Sticky session hit → try that model directly (no probe).
-    2. Race all probes concurrently. First to respond wins → full request.
-    3. Full request fails → try next fastest probe, then rest.
-    """
+    """Route via concurrent probe + full request."""
+    logger.info(f"route_chat: session={session_id}, msgs={len(body.get('messages',[]))}, has_tools={'tools' in body}")
     sticky = get_sticky(session_id) if session_id else None
+    if sticky:
+        logger.info(f"route_chat: sticky hit -> {sticky}")
     probe_models = _build_probe_models(sticky)
     sample_msg = _extract_sample(body)
 
@@ -164,6 +165,7 @@ async def route_chat(
         if sticky:
             resp, err = await _try_single(client, probe_models[0], body)
             if resp is not None:
+                logger.info(f"route_chat: sticky success -> {sticky}")
                 return normalize_response(resp, thinking_mode)
 
         # Phase 1: Race probes, first to respond gets full request
@@ -212,6 +214,7 @@ async def route_chat(
                         t.cancel()
                     if session_id:
                         set_sticky(session_id, winner.name)
+                    logger.info(f"route_chat: full request success -> {winner.name}")
                     return normalize_response(resp, thinking_mode)
                 # Full request failed, remove from ranked
                 ranked.pop(0)
@@ -259,10 +262,12 @@ async def route_chat(
             if resp is not None:
                 if session_id:
                     set_sticky(session_id, model.name)
+                logger.info(f"route_chat: fallback success -> {model.name}")
                 return normalize_response(resp, thinking_mode)
             if err:
                 errors.append(f"{model.name}({probe_lat:.1f}s):{err}")
 
+    logger.error(f"route_chat: all failed: {errors}")
     raise RouteError(f"All models failed: {'; '.join(errors)}")
 
 
@@ -282,7 +287,10 @@ async def route_chat_stream(
     thinking_mode: ThinkingMode = ThinkingMode.normalize,
 ) -> AsyncIterator[str]:
     """Streaming version: probe first, then stream from fastest model."""
+    logger.info(f"route_chat_stream: session={session_id}, msgs={len(body.get('messages',[]))}")
     sticky = get_sticky(session_id) if session_id else None
+    if sticky:
+        logger.info(f"route_chat_stream: sticky hit -> {sticky}")
     probe_models = _build_probe_models(sticky)
     sample_msg = _extract_sample(body)
 
@@ -320,6 +328,7 @@ async def route_chat_stream(
                 return
 
             winner, probe_lat = ranked[0]
+            logger.info(f"route_chat_stream: probe winner -> {winner.name} ({probe_lat:.1f}s)")
             async for chunk in _stream_from_model(client, winner, body, session_id, thinking_mode):
                 yield chunk
             return
@@ -357,6 +366,8 @@ async def _stream_from_model(
     if model.extra_body:
         request_body = {**request_body, **model.extra_body}
 
+    logger.info(f"Streaming from {model.name} key={model.api_key[:12]}...")
+
     try:
         async with client.stream(
             "POST",
@@ -368,14 +379,25 @@ async def _stream_from_model(
             },
             timeout=httpx.Timeout(config.full_timeout, connect=10.0),
         ) as resp:
+            logger.info(f"Stream response: {model.name} status={resp.status_code}")
             if resp.status_code == 200:
                 if session_id:
                     set_sticky(session_id, model.name)
+                chunk_count = 0
+                first_chunk = True
                 async for text_chunk in resp.aiter_text():
+                    if first_chunk:
+                        logger.info(f"Stream first chunk from {model.name}: {text_chunk[:200]}")
+                        first_chunk = False
+                    chunk_count += 1
                     yield text_chunk
+                logger.info(f"Stream ended from {model.name}: {chunk_count} chunks, yielding [DONE]")
+                yield "data: [DONE]\n\n"
             else:
+                logger.warning(f"Stream failed: {model.name} status={resp.status_code}")
                 yield "data: [DONE]\n\n"
     except (httpx.TimeoutException, asyncio.CancelledError, Exception) as e:
+        logger.error(f"Stream exception from {model.name}: {type(e).__name__}: {e}")
         yield "data: [DONE]\n\n"
 
 

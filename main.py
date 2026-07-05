@@ -1,4 +1,5 @@
 import json
+import logging
 import uuid
 from typing import Optional, Any
 
@@ -11,8 +12,15 @@ from config import config
 from router import route_chat, route_chat_stream, RouteError
 from normalizer import ThinkingMode
 
+logger = logging.getLogger("nvidia-router")
+
 app = FastAPI(title="NVIDIA Model Router", version="1.0.0")
 security = HTTPBearer(auto_error=False)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
+)
 
 
 def verify_key(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)):
@@ -65,6 +73,8 @@ async def chat_completions(req: ChatRequest, _=Depends(verify_key)):
     session_id = req.session_id
     thinking_mode = ThinkingMode(config.thinking_mode)
 
+    logger.info(f"chat_completions: stream={req.stream} session={session_id} msgs={len(req.messages)} tools={'tools' in body}")
+
     try:
         if req.stream:
             return StreamingResponse(
@@ -88,9 +98,15 @@ async def _stream_response(
     thinking_mode: ThinkingMode,
 ):
     try:
+        chunk_count = 0
         async for chunk in route_chat_stream(body, session_id, thinking_mode):
+            if chunk_count == 0:
+                logger.info(f"Stream: first chunk [{len(chunk)} chars]")
+            chunk_count += 1
             yield chunk
+        logger.info(f"Stream: done, {chunk_count} chunks yielded")
     except RouteError as e:
+        logger.error(f"Stream error: {e}")
         yield f"data: {json.dumps({'error': str(e)})}\n\n"
         yield "data: [DONE]\n\n"
 
