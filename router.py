@@ -324,8 +324,10 @@ def _sanitize_messages(messages: list[dict]) -> list[dict]:
 
 def _strip_inline_thinking(content: str) -> str:
     import re
+    L = chr(60)
+    R = chr(62)
     for pattern in [
-        re.compile(r"<think[^>]*>.*? response", re.DOTALL),
+        re.compile(L + r"think[^" + R + r"]*" + R + r"(.*?)" + L + r"/think" + R, re.DOTALL),
         re.compile(r"【思考[^】]*】.*?【回答】", re.DOTALL),
     ]:
         content = pattern.sub("", content)
