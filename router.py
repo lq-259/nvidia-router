@@ -303,23 +303,27 @@ def _extract_sample(body: dict) -> str:
 
 
 def _sanitize_messages(messages: list[dict], model_name: str = "") -> list[dict]:
-    """Clean up reasoning content from assistant messages.
+    """Normalize reasoning fields in assistant messages.
 
     DeepSeek V4 / MiMo require ``reasoning_content=""`` in history.
-    When switching models, ``reasoning`` is converted to ``reasoning_content``
-    for DeepSeek/MiMo targets. Other models get reasoning stripped.
+    When switching models, ``reasoning`` ↔ ``reasoning_content`` are converted
+    to match the target model's expected format.
     """
-    needs_reasoning = "deepseek" in model_name.lower() or "mimo" in model_name.lower()
+    needs_reasoning_content = "deepseek" in model_name.lower() or "mimo" in model_name.lower()
     cleaned = []
     for m in messages:
         if m.get("role") == "assistant":
             m = {**m}
             reasoning = m.pop("reasoning", None)
             rc = m.pop("reasoning_content", None)
-            if needs_reasoning:
-                # DeepSeek/MiMo: convert reasoning → reasoning_content
-                m["reasoning_content"] = rc or reasoning or ""
-            elif isinstance(m.get("content"), str) and m["content"]:
+            merged = rc or reasoning
+            if needs_reasoning_content:
+                # DeepSeek/MiMo target: reasoning_content required
+                m["reasoning_content"] = merged or ""
+            elif merged:
+                # Other models: keep as reasoning if that was the original format
+                m["reasoning"] = merged
+            if isinstance(m.get("content"), str) and m["content"]:
                 m["content"] = _strip_inline_thinking(m["content"])
         cleaned.append(m)
     return cleaned
