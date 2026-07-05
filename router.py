@@ -140,14 +140,9 @@ async def _try_single(
         for i, m in enumerate(tool_msgs):
             if "tool_call_id" not in m:
                 logger.warning(f"  tool msg[{i}]: keys={list(m.keys())}")
-    if "tools" in request_body:
+    if config.debug and "tools" in request_body:
         tools = request_body["tools"]
         logger.info(f"Request to {model.name}: tools={len(tools)} functions, tool_choice={request_body.get('tool_choice', 'not set')}")
-    else:
-        logger.info(f"Request to {model.name}: NO tools in request")
-    for i, m in enumerate(msgs):
-        if m.get("role") == "assistant" and "tool_calls" in m:
-            logger.info(f"  msg[{i}] assistant with {len(m['tool_calls'])} tool_calls")
 
     try:
         resp = await client.post(
@@ -436,10 +431,8 @@ async def _stream_from_model(
     request_body["messages"] = _sanitize_messages(request_body.get("messages", []))
 
     logger.info(f"Streaming from {model.name} key={model.api_key[:12]}...")
-    if "tools" in request_body:
+    if config.debug and "tools" in request_body:
         logger.info(f"  tools={len(request_body['tools'])} functions, tool_choice={request_body.get('tool_choice', 'not set')}")
-    else:
-        logger.info(f"  NO tools in request")
 
     try:
         async with client.stream(
