@@ -128,6 +128,9 @@ async def _try_single(
     if model.extra_body:
         request_body = {**request_body, **model.extra_body}
 
+    # Sanitize messages to prevent cross-model reasoning pollution
+    request_body["messages"] = _sanitize_messages(request_body.get("messages", []))
+
     # Log message types and tool_call_id presence for debugging
     msgs = request_body.get("messages", [])
     tool_msgs = [m for m in msgs if m.get("role") == "tool"]
@@ -296,6 +299,39 @@ def _extract_sample(body: dict) -> str:
     return "hi"
 
 
+def _sanitize_messages(messages: list[dict]) -> list[dict]:
+    """Clean up reasoning content from assistant messages to prevent cross-model pollution.
+
+    Different models handle thinking differently:
+    - DeepSeek/Kimi: ``reasoning_content`` field
+    - MiniMax: ``reasoning`` field
+    - GLM/Qwen: inline `` response`` tags in content
+
+    When switching models, stale reasoning fields from one model can confuse another.
+    We strip all reasoning and keep only the final ``content``.
+    """
+    cleaned = []
+    for m in messages:
+        if m.get("role") == "assistant":
+            m = {**m}
+            m.pop("reasoning_content", None)
+            m.pop("reasoning", None)
+            if isinstance(m.get("content"), str) and m["content"]:
+                m["content"] = _strip_inline_thinking(m["content"])
+        cleaned.append(m)
+    return cleaned
+
+
+def _strip_inline_thinking(content: str) -> str:
+    import re
+    for pattern in [
+        re.compile(r"<think[^>]*>.*? response", re.DOTALL),
+        re.compile(r"【思考[^】]*】.*?【回答】", re.DOTALL),
+    ]:
+        content = pattern.sub("", content)
+    return content.strip()
+
+
 async def route_chat_stream(
     body: dict,
     session_id: Optional[str] = None,
@@ -382,6 +418,7 @@ async def _stream_from_model(
     request_body = {**body, "model": model.model_id, "stream": True}
     if model.extra_body:
         request_body = {**request_body, **model.extra_body}
+    request_body["messages"] = _sanitize_messages(request_body.get("messages", []))
 
     logger.info(f"Streaming from {model.name} key={model.api_key[:12]}...")
 
