@@ -331,15 +331,14 @@ async def route_chat_stream(
 
         errors: list[str] = []
         for model, probe_lat in ranked:
-            success = False
+            had_content = False
             async for chunk in _stream_from_model(client, model, body, session_id, thinking_mode):
-                if chunk.startswith("data:") and '"error"' in chunk:
-                    errors.append(f"{model.name}({probe_lat:.1f}s)")
-                else:
-                    success = True
+                if chunk.startswith('data: {"choices"'):
+                    had_content = True
                 yield chunk
-            if success:
+            if had_content:
                 return
+            errors.append(f"{model.name}({probe_lat:.1f}s)")
 
         errors_str = "; ".join(errors)
         yield f"data: {json.dumps({'error': f'All models failed: {errors_str}'})}\n\n"
@@ -377,11 +376,11 @@ async def _stream_from_model(
                     for result in normalizer.feed(line):
                         yield result
             else:
-                yield f"data: {json.dumps({'error': f'{model.name}:{resp.status_code}'})}\n\n"
-                yield "data: [DONE]\n\n"
+                yield "data: [DONE]"
+                yield ""
     except (httpx.TimeoutException, Exception) as e:
-        yield f"data: {json.dumps({'error': f'{model.name}:{type(e).__name__}'})}\n\n"
-        yield "data: [DONE]\n\n"
+        yield "data: [DONE]"
+        yield ""
 
 
 class RouteError(Exception):
