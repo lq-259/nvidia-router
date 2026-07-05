@@ -371,14 +371,12 @@ async def _stream_from_model(
             if resp.status_code == 200:
                 if session_id:
                     set_sticky(session_id, model.name)
-                async for raw_bytes in resp.aiter_raw():
-                    yield raw_bytes.decode("utf-8", errors="replace")
+                async for text_chunk in resp.aiter_text():
+                    yield text_chunk
             else:
-                yield "data: [DONE]"
-                yield ""
+                yield "data: [DONE]\n\n"
     except (httpx.TimeoutException, asyncio.CancelledError, Exception) as e:
-        yield "data: [DONE]"
-        yield ""
+        yield "data: [DONE]\n\n"
 
 
 class RouteError(Exception):
