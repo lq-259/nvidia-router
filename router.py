@@ -140,13 +140,14 @@ async def _try_single(
         for i, m in enumerate(tool_msgs):
             if "tool_call_id" not in m:
                 logger.warning(f"  tool msg[{i}]: keys={list(m.keys())}")
-    if config.debug and "tools" in request_body:
+    if "tools" in request_body:
         tools = request_body["tools"]
-        logger.debug(f"Request to {model.name}: tools={len(tools)} functions, tool_choice={request_body.get('tool_choice', 'not set')}")
-    if config.debug:
-        for i, m in enumerate(msgs):
-            if m.get("role") == "assistant" and "tool_calls" in m:
-                logger.debug(f"  msg[{i}] assistant with {len(m['tool_calls'])} tool_calls")
+        logger.info(f"Request to {model.name}: tools={len(tools)} functions, tool_choice={request_body.get('tool_choice', 'not set')}")
+    else:
+        logger.info(f"Request to {model.name}: NO tools in request")
+    for i, m in enumerate(msgs):
+        if m.get("role") == "assistant" and "tool_calls" in m:
+            logger.info(f"  msg[{i}] assistant with {len(m['tool_calls'])} tool_calls")
 
     try:
         resp = await client.post(
