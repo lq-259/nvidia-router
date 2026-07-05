@@ -29,6 +29,7 @@ class ChatMessage(BaseModel):
 
 
 class ChatRequest(BaseModel):
+    model_config = {"extra": "allow"}
     model: str = "auto"
     messages: list[ChatMessage]
     temperature: float = 0.7
@@ -39,8 +40,6 @@ class ChatRequest(BaseModel):
         default=None,
         description="Sticky session ID. Same ID gets same model on success.",
     )
-    tools: Optional[list[dict[str, Any]]] = None
-    tool_choice: Any = None
 
 
 @app.get("/health")
@@ -50,16 +49,18 @@ async def health():
 
 @app.post("/v1/chat/completions")
 async def chat_completions(req: ChatRequest, _=Depends(verify_key)):
+    # Build body from all request fields, minus internal ones
     body = {
         "messages": [m.model_dump() for m in req.messages],
         "temperature": req.temperature,
         "max_tokens": req.max_tokens,
         "top_p": req.top_p,
     }
-    if req.tools is not None:
-        body["tools"] = req.tools
-    if req.tool_choice is not None:
-        body["tool_choice"] = req.tool_choice
+    for key, val in req.model_dump().items():
+        if key in ("model", "messages", "temperature", "max_tokens", "top_p", "stream", "session_id"):
+            continue
+        if val is not None:
+            body[key] = val
 
     session_id = req.session_id
     thinking_mode = ThinkingMode(config.thinking_mode)
