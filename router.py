@@ -165,6 +165,8 @@ async def route_chat(
 ) -> dict:
     """Route via concurrent probe + full request."""
     logger.info(f"route_chat: session={session_id}, msgs={len(body.get('messages',[]))}, has_tools={'tools' in body}")
+    if len(body.get('messages', [])) > 50:
+        logger.warning(f"route_chat: large context ({len(body['messages'])} msgs), may need longer timeout")
     sticky = get_sticky(session_id) if session_id else None
     if sticky and config.debug:
         logger.info(f"route_chat: sticky hit -> {sticky}")
@@ -303,6 +305,8 @@ async def route_chat_stream(
     sticky = get_sticky(session_id) if session_id else None
     if sticky and config.debug:
         logger.info(f"route_chat_stream: sticky hit -> {sticky}")
+    if len(body.get('messages', [])) > 50:
+        logger.warning(f"route_chat_stream: large context ({len(body['messages'])} msgs)")
     probe_models = _build_probe_models(sticky)
     sample_msg = _extract_sample(body)
 
