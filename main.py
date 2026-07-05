@@ -6,7 +6,7 @@ from typing import Optional, Any
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 from config import config
 from router import route_chat, route_chat_stream, RouteError
@@ -32,12 +32,13 @@ def verify_key(credentials: Optional[HTTPAuthorizationCredentials] = Depends(sec
 
 
 class ChatMessage(BaseModel):
+    model_config = ConfigDict(extra="allow")
     role: str
     content: Any = None
 
 
 class ChatRequest(BaseModel):
-    model_config = {"extra": "allow"}
+    model_config = ConfigDict(extra="allow")
     model: str = "auto"
     messages: list[ChatMessage]
     temperature: float = 0.7

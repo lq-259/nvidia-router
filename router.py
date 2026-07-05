@@ -135,8 +135,11 @@ async def _try_single(
     missing_tcid = any("tool_call_id" not in m for m in tool_msgs)
     if missing_tcid:
         logger.warning(f"Request to {model.name}: {len(msgs)} msgs, {len(tool_msgs)} tool msgs, SOME MISSING tool_call_id!")
+        for i, m in enumerate(tool_msgs):
+            if "tool_call_id" not in m:
+                logger.warning(f"  tool msg[{i}]: keys={list(m.keys())}")
     else:
-                logger.info(f"Request to {model.name}: {len(msgs)} msgs, tool_msgs={len(tool_msgs)}, has_tool_calls={has_tool_calls}")
+        logger.info(f"Request to {model.name}: {len(msgs)} msgs, tool_msgs={len(tool_msgs)}, has_tool_calls={has_tool_calls}")
 
     try:
         resp = await client.post(
