@@ -34,6 +34,7 @@ class Config:
     port: int = int(os.getenv("PORT", "8000"))
     thinking_mode: str = os.getenv("THINKING_MODE", "normalize")
     auth_api_key: str = os.getenv("AUTH_API_KEY", "")
+    debug: bool = os.getenv("DEBUG", "").lower() in ("1", "true", "yes")
 
 
 def _load_api_keys() -> list[str]:

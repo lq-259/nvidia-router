@@ -132,7 +132,7 @@ async def _try_single(
     msgs = request_body.get("messages", [])
     tool_msgs = [m for m in msgs if m.get("role") == "tool"]
     missing_tcid = any("tool_call_id" not in m for m in tool_msgs)
-    if missing_tcid:
+    if missing_tcid and config.debug:
         logger.warning(f"Request to {model.name}: {len(msgs)} msgs, {len(tool_msgs)} tool msgs, SOME MISSING tool_call_id!")
         for i, m in enumerate(tool_msgs):
             if "tool_call_id" not in m:
@@ -166,6 +166,8 @@ async def route_chat(
     """Route via concurrent probe + full request."""
     logger.info(f"route_chat: session={session_id}, msgs={len(body.get('messages',[]))}, has_tools={'tools' in body}")
     sticky = get_sticky(session_id) if session_id else None
+    if sticky and config.debug:
+        logger.info(f"route_chat: sticky hit -> {sticky}")
     probe_models = _build_probe_models(sticky)
     sample_msg = _extract_sample(body)
 
@@ -173,7 +175,8 @@ async def route_chat(
         if sticky:
             resp, err = await _try_single(client, probe_models[0], body)
             if resp is not None:
-                logger.info(f"route_chat: sticky success -> {sticky}")
+                if config.debug:
+                    logger.info(f"route_chat: sticky success -> {sticky}")
                 return normalize_response(resp, thinking_mode)
 
         # Phase 1: Race probes, first to respond gets full request
@@ -222,7 +225,8 @@ async def route_chat(
                         t.cancel()
                     if session_id:
                         set_sticky(session_id, winner.name)
-                    logger.info(f"route_chat: full request success -> {winner.name}")
+                    if config.debug:
+                        logger.info(f"route_chat: full request success -> {winner.name}")
                     return normalize_response(resp, thinking_mode)
                 # Full request failed, remove from ranked
                 ranked.pop(0)
@@ -270,7 +274,8 @@ async def route_chat(
             if resp is not None:
                 if session_id:
                     set_sticky(session_id, model.name)
-                logger.info(f"route_chat: fallback success -> {model.name}")
+                if config.debug:
+                    logger.info(f"route_chat: fallback success -> {model.name}")
                 return normalize_response(resp, thinking_mode)
             if err:
                 errors.append(f"{model.name}({probe_lat:.1f}s):{err}")
@@ -296,6 +301,8 @@ async def route_chat_stream(
 ) -> AsyncIterator[str]:
     """Streaming version: probe first, then stream from fastest model."""
     sticky = get_sticky(session_id) if session_id else None
+    if sticky and config.debug:
+        logger.info(f"route_chat_stream: sticky hit -> {sticky}")
     probe_models = _build_probe_models(sticky)
     sample_msg = _extract_sample(body)
 
@@ -333,7 +340,8 @@ async def route_chat_stream(
                 return
 
             winner, probe_lat = ranked[0]
-            logger.info(f"route_chat_stream: probe winner -> {winner.name} ({probe_lat:.1f}s)")
+            if config.debug:
+                logger.info(f"route_chat_stream: probe winner -> {winner.name} ({probe_lat:.1f}s)")
             async for chunk in _stream_from_model(client, winner, body, session_id, thinking_mode):
                 yield chunk
             return
