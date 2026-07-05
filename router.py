@@ -128,6 +128,16 @@ async def _try_single(
     if model.extra_body:
         request_body = {**request_body, **model.extra_body}
 
+    # Log message types and tool_call_id presence for debugging
+    msgs = request_body.get("messages", [])
+    tool_msgs = [m for m in msgs if m.get("role") == "tool"]
+    has_tool_calls = any("tool_calls" in m for m in msgs)
+    missing_tcid = any("tool_call_id" not in m for m in tool_msgs)
+    if missing_tcid:
+        logger.warning(f"Request to {model.name}: {len(msgs)} msgs, {len(tool_msgs)} tool msgs, SOME MISSING tool_call_id!")
+    else:
+                logger.info(f"Request to {model.name}: {len(msgs)} msgs, tool_msgs={len(tool_msgs)}, has_tool_calls={has_tool_calls}")
+
     try:
         resp = await client.post(
             url,
