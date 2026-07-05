@@ -129,7 +129,7 @@ async def _try_single(
         request_body = {**request_body, **model.extra_body}
 
     # Sanitize messages to prevent cross-model reasoning pollution
-    request_body["messages"] = _sanitize_messages(request_body.get("messages", []))
+    request_body["messages"] = _sanitize_messages(request_body.get("messages", []), model.name)
 
     # Log message types and tool_call_id presence for debugging
     msgs = request_body.get("messages", [])
@@ -299,23 +299,28 @@ def _extract_sample(body: dict) -> str:
     return "hi"
 
 
-def _sanitize_messages(messages: list[dict]) -> list[dict]:
+def _sanitize_messages(messages: list[dict], model_name: str = "") -> list[dict]:
     """Clean up reasoning content from assistant messages to prevent cross-model pollution.
 
     Different models handle thinking differently:
-    - DeepSeek/Kimi: ``reasoning_content`` field
+    - DeepSeek/Kimi: ``reasoning_content`` field (DeepSeek REQUIRES it in history, even empty)
     - MiniMax: ``reasoning`` field
     - GLM/Qwen: inline `` response`` tags in content
 
     When switching models, stale reasoning fields from one model can confuse another.
     We strip all reasoning and keep only the final ``content``.
+    For DeepSeek models, we keep ``reasoning_content=""`` as required.
     """
+    needs_reasoning = "deepseek" in model_name.lower()
     cleaned = []
     for m in messages:
         if m.get("role") == "assistant":
             m = {**m}
-            m.pop("reasoning_content", None)
             m.pop("reasoning", None)
+            if needs_reasoning:
+                m["reasoning_content"] = ""
+            else:
+                m.pop("reasoning_content", None)
             if isinstance(m.get("content"), str) and m["content"]:
                 m["content"] = _strip_inline_thinking(m["content"])
         cleaned.append(m)
