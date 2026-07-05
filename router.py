@@ -303,17 +303,22 @@ def _extract_sample(body: dict) -> str:
 
 
 def _sanitize_messages(messages: list[dict], model_name: str = "") -> list[dict]:
-    """Clean up reasoning content from ALL assistant messages.
+    """Clean up reasoning content from assistant messages.
 
-    Different models handle thinking differently, causing cross-model pollution.
-    Strip all reasoning to keep conversation history clean and consistent.
+    DeepSeek V4 requires ``reasoning_content=""`` in history (API returns 400 without it).
+    All other models: strip reasoning entirely to prevent cross-model pollution.
     """
+    needs_reasoning = "deepseek" in model_name.lower() or "mimo" in model_name.lower()
     cleaned = []
     for m in messages:
         if m.get("role") == "assistant":
             m = {**m}
-            m.pop("reasoning_content", None)
             m.pop("reasoning", None)
+            if needs_reasoning:
+                if "reasoning_content" not in m:
+                    m["reasoning_content"] = ""
+            else:
+                m.pop("reasoning_content", None)
             if isinstance(m.get("content"), str) and m["content"]:
                 m["content"] = _strip_inline_thinking(m["content"])
         cleaned.append(m)
@@ -418,7 +423,7 @@ async def _stream_from_model(
     request_body = {**body, "model": model.model_id, "stream": True}
     if model.extra_body:
         request_body = {**request_body, **model.extra_body}
-    request_body["messages"] = _sanitize_messages(request_body.get("messages", []))
+    request_body["messages"] = _sanitize_messages(request_body.get("messages", []), model.name)
 
     logger.info(f"Streaming from {model.name} key={model.api_key[:12]}...")
     if config.debug and "tools" in request_body:
