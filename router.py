@@ -141,9 +141,7 @@ async def _try_single(
             return None, f"{model.name}:{resp.status_code}"
         else:
             return None, f"{model.name}:{resp.status_code}({resp.text[:200]})"
-    except httpx.TimeoutException:
-        return None, f"{model.name}:timeout"
-    except Exception as e:
+    except (httpx.TimeoutException, asyncio.CancelledError, Exception) as e:
         return None, f"{model.name}:{type(e).__name__}"
 
 
@@ -183,7 +181,7 @@ async def route_chat(
             for task in done:
                 try:
                     result = task.result()
-                except Exception:
+                except (asyncio.CancelledError, Exception):
                     continue
                 if isinstance(result, tuple) and result[1] is not None:
                     winner, probe_lat = result[0], result[1]
@@ -207,7 +205,7 @@ async def route_chat(
             if full_task in full_done:
                 try:
                     resp, err = full_task.result()
-                except Exception:
+                except (asyncio.CancelledError, Exception):
                     resp, err = None, "exception"
                 if resp is not None:
                     for t in pending:
@@ -224,7 +222,7 @@ async def route_chat(
                 for task in full_done:
                     try:
                         result = task.result()
-                    except Exception:
+                    except (asyncio.CancelledError, Exception):
                         continue
                     if isinstance(result, tuple) and result[1] is not None:
                         ranked.append((result[0], result[1]))
@@ -240,7 +238,7 @@ async def route_chat(
                     await full_task
                     try:
                         resp, err = full_task.result()
-                    except Exception:
+                    except (asyncio.CancelledError, Exception):
                         resp, err = None, "exception"
                     if resp is not None:
                         if session_id:
@@ -255,6 +253,8 @@ async def route_chat(
     errors: list[str] = []
     async with httpx.AsyncClient() as client:
         for model, probe_lat in ranked:
+            if model is None:
+                continue
             resp, err = await _try_single(client, model, body)
             if resp is not None:
                 if session_id:
@@ -306,7 +306,7 @@ async def route_chat_stream(
             for task in done:
                 try:
                     result = task.result()
-                except Exception:
+                except (asyncio.CancelledError, Exception):
                     continue
                 if isinstance(result, tuple) and result[1] is not None:
                     ranked.append((result[0], result[1]))
@@ -378,7 +378,7 @@ async def _stream_from_model(
             else:
                 yield "data: [DONE]"
                 yield ""
-    except (httpx.TimeoutException, Exception) as e:
+    except (httpx.TimeoutException, asyncio.CancelledError, Exception) as e:
         yield "data: [DONE]"
         yield ""
 
