@@ -131,15 +131,12 @@ async def _try_single(
     # Log message types and tool_call_id presence for debugging
     msgs = request_body.get("messages", [])
     tool_msgs = [m for m in msgs if m.get("role") == "tool"]
-    has_tool_calls = any("tool_calls" in m for m in msgs)
     missing_tcid = any("tool_call_id" not in m for m in tool_msgs)
     if missing_tcid:
         logger.warning(f"Request to {model.name}: {len(msgs)} msgs, {len(tool_msgs)} tool msgs, SOME MISSING tool_call_id!")
         for i, m in enumerate(tool_msgs):
             if "tool_call_id" not in m:
                 logger.warning(f"  tool msg[{i}]: keys={list(m.keys())}")
-    else:
-        logger.info(f"Request to {model.name}: {len(msgs)} msgs, tool_msgs={len(tool_msgs)}, has_tool_calls={has_tool_calls}")
 
     try:
         resp = await client.post(
@@ -169,8 +166,6 @@ async def route_chat(
     """Route via concurrent probe + full request."""
     logger.info(f"route_chat: session={session_id}, msgs={len(body.get('messages',[]))}, has_tools={'tools' in body}")
     sticky = get_sticky(session_id) if session_id else None
-    if sticky:
-        logger.info(f"route_chat: sticky hit -> {sticky}")
     probe_models = _build_probe_models(sticky)
     sample_msg = _extract_sample(body)
 
@@ -300,10 +295,7 @@ async def route_chat_stream(
     thinking_mode: ThinkingMode = ThinkingMode.normalize,
 ) -> AsyncIterator[str]:
     """Streaming version: probe first, then stream from fastest model."""
-    logger.info(f"route_chat_stream: session={session_id}, msgs={len(body.get('messages',[]))}")
     sticky = get_sticky(session_id) if session_id else None
-    if sticky:
-        logger.info(f"route_chat_stream: sticky hit -> {sticky}")
     probe_models = _build_probe_models(sticky)
     sample_msg = _extract_sample(body)
 
@@ -396,15 +388,8 @@ async def _stream_from_model(
             if resp.status_code == 200:
                 if session_id:
                     set_sticky(session_id, model.name)
-                chunk_count = 0
-                first_chunk = True
                 async for text_chunk in resp.aiter_text():
-                    if first_chunk:
-                        logger.info(f"Stream first chunk from {model.name}: {text_chunk[:200]}")
-                        first_chunk = False
-                    chunk_count += 1
                     yield text_chunk
-                logger.info(f"Stream ended from {model.name}: {chunk_count} chunks, yielding [DONE]")
                 yield "data: [DONE]\n\n"
             else:
                 logger.warning(f"Stream failed: {model.name} status={resp.status_code}")

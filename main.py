@@ -74,8 +74,6 @@ async def chat_completions(req: ChatRequest, _=Depends(verify_key)):
     session_id = req.session_id
     thinking_mode = ThinkingMode(config.thinking_mode)
 
-    logger.info(f"chat_completions: stream={req.stream} session={session_id} msgs={len(req.messages)} tools={'tools' in body}")
-
     try:
         if req.stream:
             return StreamingResponse(
@@ -99,13 +97,8 @@ async def _stream_response(
     thinking_mode: ThinkingMode,
 ):
     try:
-        chunk_count = 0
         async for chunk in route_chat_stream(body, session_id, thinking_mode):
-            if chunk_count == 0:
-                logger.info(f"Stream: first chunk [{len(chunk)} chars]")
-            chunk_count += 1
             yield chunk
-        logger.info(f"Stream: done, {chunk_count} chunks yielded")
     except RouteError as e:
         logger.error(f"Stream error: {e}")
         yield f"data: {json.dumps({'error': str(e)})}\n\n"
