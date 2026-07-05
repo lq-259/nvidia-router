@@ -306,8 +306,8 @@ def _sanitize_messages(messages: list[dict], model_name: str = "") -> list[dict]
     """Normalize reasoning fields in assistant messages.
 
     DeepSeek V4 / MiMo require ``reasoning_content=""`` in history.
-    When switching models, ``reasoning`` ↔ ``reasoning_content`` are converted
-    to match the target model's expected format.
+    For other models, both ``reasoning`` and ``reasoning_content`` are kept as-is
+    to avoid confusing models that use one or the other natively.
     """
     needs_reasoning_content = "deepseek" in model_name.lower() or "mimo" in model_name.lower()
     cleaned = []
@@ -316,13 +316,15 @@ def _sanitize_messages(messages: list[dict], model_name: str = "") -> list[dict]
             m = {**m}
             reasoning = m.pop("reasoning", None)
             rc = m.pop("reasoning_content", None)
-            merged = rc or reasoning
             if needs_reasoning_content:
-                # DeepSeek/MiMo target: reasoning_content required
-                m["reasoning_content"] = merged or ""
-            elif merged:
-                # Other models: keep as reasoning if that was the original format
-                m["reasoning"] = merged
+                # DeepSeek/MiMo: reasoning → reasoning_content
+                m["reasoning_content"] = rc or reasoning or ""
+            else:
+                # Keep original format: both fields restored as-is
+                if reasoning:
+                    m["reasoning"] = reasoning
+                if rc:
+                    m["reasoning_content"] = rc
             if isinstance(m.get("content"), str) and m["content"]:
                 m["content"] = _strip_inline_thinking(m["content"])
         cleaned.append(m)
