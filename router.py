@@ -371,10 +371,8 @@ async def _stream_from_model(
             if resp.status_code == 200:
                 if session_id:
                     set_sticky(session_id, model.name)
-                normalizer = StreamNormalizer(thinking_mode)
-                async for line in resp.aiter_lines():
-                    for result in normalizer.feed(line):
-                        yield result
+                async for raw_bytes in resp.aiter_raw():
+                    yield raw_bytes.decode("utf-8", errors="replace")
             else:
                 yield "data: [DONE]"
                 yield ""

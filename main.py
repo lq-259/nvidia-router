@@ -89,7 +89,7 @@ async def _stream_response(
 ):
     try:
         async for chunk in route_chat_stream(body, session_id, thinking_mode):
-            yield chunk + "\n"
+            yield chunk
     except RouteError as e:
         yield f"data: {json.dumps({'error': str(e)})}\n\n"
         yield "data: [DONE]\n\n"
