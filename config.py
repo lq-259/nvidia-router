@@ -65,9 +65,6 @@ MODEL_EXTRA = {
     "deepseek-ai/deepseek-v4-pro": {
         "chat_template_kwargs": {"thinking": True, "reasoning_effort": "max"}
     },
-    "moonshotai/kimi-k2.6": {
-        "chat_template_kwargs": {"thinking": True}
-    },
     "z-ai/glm-5.2": {
         "chat_template_kwargs": {"thinking": True}
     },
