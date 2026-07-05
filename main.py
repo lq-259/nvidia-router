@@ -98,7 +98,7 @@ async def _stream_response(
 ):
     try:
         async for chunk in route_chat_stream(body, session_id, thinking_mode):
-            yield chunk
+            yield chunk + "\n" if chunk else ""
     except RouteError as e:
         logger.error(f"Stream error: {e}")
         yield f"data: {json.dumps({'error': str(e)})}\n\n"

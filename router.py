@@ -388,9 +388,10 @@ async def _stream_from_model(
             if resp.status_code == 200:
                 if session_id:
                     set_sticky(session_id, model.name)
-                async for text_chunk in resp.aiter_text():
-                    yield text_chunk
-                yield "data: [DONE]\n\n"
+                normalizer = StreamNormalizer(thinking_mode)
+                async for line in resp.aiter_lines():
+                    for result in normalizer.feed(line):
+                        yield result
             else:
                 logger.warning(f"Stream failed: {model.name} status={resp.status_code}")
                 yield "data: [DONE]\n\n"
