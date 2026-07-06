@@ -303,11 +303,12 @@ def _extract_sample(body: dict) -> str:
 
 
 def _sanitize_messages(messages: list[dict], model_name: str = "") -> list[dict]:
-    """Normalize reasoning fields and tool call IDs to prevent cross-model pattern pollution.
+    """Normalize reasoning fields and prevent cross-model tool call pattern pollution.
 
-    DeepSeek V4 / MiMo require ``reasoning_content=""`` in history.
-    Tool call IDs are replaced with generic IDs to prevent pattern continuation
-    when switching models with different tool calling implementations.
+    When switching models, tool call patterns from one model can trigger
+    pattern continuation in another (e.g. Kimi continues DeepSeek's tool_call IDs).
+    We strip tool_calls from assistant messages and inline tool responses to
+    break the pattern trigger while preserving the conversation context.
     """
     needs_reasoning_content = "deepseek" in model_name.lower() or "mimo" in model_name.lower()
     cleaned = []
@@ -325,16 +326,18 @@ def _sanitize_messages(messages: list[dict], model_name: str = "") -> list[dict]
                     m["reasoning_content"] = rc
             if isinstance(m.get("content"), str) and m["content"]:
                 m["content"] = _strip_inline_thinking(m["content"])
-            # Replace tool call IDs with generic ones to prevent pattern trigger
+            # Strip tool_calls to prevent cross-model pattern trigger
+            # Keep content as-is so the conversation context is preserved
             if "tool_calls" in m:
-                for tc in m["tool_calls"]:
-                    if isinstance(tc, dict) and "id" in tc:
-                        tc["id"] = f"call_{hash(tc['id'])}"[:20]
+                tc_names = [tc["function"]["name"] for tc in m["tool_calls"] if isinstance(tc, dict)]
+                if tc_names and not m.get("content"):
+                    m["content"] = f"[Called tools: {', '.join(tc_names)}]"
+                m.pop("tool_calls", None)
         elif m.get("role") == "tool":
             m = {**m}
-            tid = m.get("tool_call_id")
-            if tid:
-                m["tool_call_id"] = f"call_{hash(tid)}"[:20]
+            m["role"] = "user"
+            m["content"] = f"[Tool result: {m.get('content', '')}]"
+            m.pop("tool_call_id", None)
         cleaned.append(m)
     return cleaned
 
