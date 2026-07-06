@@ -303,11 +303,11 @@ def _extract_sample(body: dict) -> str:
 
 
 def _sanitize_messages(messages: list[dict], model_name: str = "") -> list[dict]:
-    """Normalize reasoning fields in assistant messages.
+    """Normalize reasoning fields and tool call IDs to prevent cross-model pattern pollution.
 
     DeepSeek V4 / MiMo require ``reasoning_content=""`` in history.
-    For other models, both ``reasoning`` and ``reasoning_content`` are kept as-is
-    to avoid confusing models that use one or the other natively.
+    Tool call IDs are replaced with generic IDs to prevent pattern continuation
+    when switching models with different tool calling implementations.
     """
     needs_reasoning_content = "deepseek" in model_name.lower() or "mimo" in model_name.lower()
     cleaned = []
@@ -317,16 +317,24 @@ def _sanitize_messages(messages: list[dict], model_name: str = "") -> list[dict]
             reasoning = m.pop("reasoning", None)
             rc = m.pop("reasoning_content", None)
             if needs_reasoning_content:
-                # DeepSeek/MiMo: reasoning → reasoning_content
                 m["reasoning_content"] = rc or reasoning or ""
             else:
-                # Keep original format: both fields restored as-is
                 if reasoning:
                     m["reasoning"] = reasoning
                 if rc:
                     m["reasoning_content"] = rc
             if isinstance(m.get("content"), str) and m["content"]:
                 m["content"] = _strip_inline_thinking(m["content"])
+            # Replace tool call IDs with generic ones to prevent pattern trigger
+            if "tool_calls" in m:
+                for tc in m["tool_calls"]:
+                    if isinstance(tc, dict) and "id" in tc:
+                        tc["id"] = f"call_{hash(tc['id'])}"[:20]
+        elif m.get("role") == "tool":
+            m = {**m}
+            tid = m.get("tool_call_id")
+            if tid:
+                m["tool_call_id"] = f"call_{hash(tid)}"[:20]
         cleaned.append(m)
     return cleaned
 
