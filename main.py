@@ -77,9 +77,16 @@ async def chat_completions(req: ChatRequest, _=Depends(verify_key)):
     if not session_id:
         import hashlib
         for m in req.messages:
-            if m.role == "user" and isinstance(m.content, str) and m.content:
-                session_id = hashlib.md5(m.content.encode()).hexdigest()[:12]
-                break
+            if m.role == "user":
+                content = m.content
+                if isinstance(content, str) and content:
+                    session_id = hashlib.md5(content.encode()).hexdigest()[:12]
+                    break
+                elif isinstance(content, list):
+                    text = "".join(p.get("text", "") for p in content if isinstance(p, dict))
+                    if text:
+                        session_id = hashlib.md5(text.encode()).hexdigest()[:12]
+                        break
     thinking_mode = ThinkingMode(config.thinking_mode)
 
     try:
