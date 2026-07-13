@@ -74,7 +74,7 @@ async def chat_completions(req: ChatRequest, _=Depends(verify_key)):
             body[key] = val
 
     session_id = req.session_id
-    if not session_id:
+    if not session_id and len(req.messages) >= 5:
         import hashlib
         for m in req.messages:
             if m.role == "user":
