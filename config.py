@@ -52,10 +52,12 @@ def _load_models() -> list[str]:
 
 
 DEFAULT_MODELS = [
-    "moonshotai/kimi-k2.6",
+    "stepfun-ai/step-3.7-flash",
     "deepseek-ai/deepseek-v4-flash",
     "minimaxai/minimax-m2.7",
-    "z-ai/glm-5.1",
+    "z-ai/glm-5.2",
+    "minimaxai/minimax-m3",
+    "deepseek-ai/deepseek-v4-pro",
 ]
 
 MODEL_EXTRA = {
