@@ -74,6 +74,12 @@ async def chat_completions(req: ChatRequest, _=Depends(verify_key)):
             body[key] = val
 
     session_id = req.session_id
+    if not session_id:
+        import hashlib
+        for m in req.messages:
+            if m.role == "user" and isinstance(m.content, str) and m.content:
+                session_id = hashlib.md5(m.content.encode()).hexdigest()[:12]
+                break
     thinking_mode = ThinkingMode(config.thinking_mode)
 
     try:
