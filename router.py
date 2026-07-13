@@ -186,12 +186,7 @@ async def route_chat(
     probe_models = _build_probe_models(sticky)
     sample_msg = _extract_sample(body)
 
-    # Detect active tool chain: if history has tool_calls, keep the same model
     msgs = body.get("messages", [])
-    has_tool_history = any(m.get("role") == "tool" or (m.get("role") == "assistant" and m.get("tool_calls")) for m in msgs)
-    if has_tool_history and sticky:
-        logger.info(f"route_chat: tool chain active, re-using sticky model {sticky}")
-        probe_models = [probe_models[0]] if probe_models else probe_models
 
     async with httpx.AsyncClient() as client:
         if sticky:
@@ -317,12 +312,11 @@ def _extract_sample(body: dict) -> str:
 
 
 def _sanitize_messages(messages: list[dict], model_name: str = "") -> list[dict]:
-    """Normalize reasoning fields and prevent cross-model tool call pattern pollution.
+    """Normalize reasoning fields and tool call IDs for cross-model compatibility.
 
-    When switching models, tool call patterns from one model can trigger
-    pattern continuation in another (e.g. Kimi continues DeepSeek's tool_call IDs).
-    We strip tool_calls from assistant messages and inline tool responses to
-    break the pattern trigger while preserving the conversation context.
+    DeepSeek V4 / MiMo require ``reasoning_content=""`` in history.
+    Tool call IDs are normalized to a uniform format to prevent one model's
+    ID pattern from triggering pattern continuation in another model.
     """
     needs_reasoning_content = "deepseek" in model_name.lower() or "mimo" in model_name.lower()
     cleaned = []
@@ -334,24 +328,19 @@ def _sanitize_messages(messages: list[dict], model_name: str = "") -> list[dict]
             if needs_reasoning_content:
                 m["reasoning_content"] = rc or reasoning or ""
             else:
-                if reasoning:
-                    m["reasoning"] = reasoning
-                if rc:
-                    m["reasoning_content"] = rc
+                if reasoning: m["reasoning"] = reasoning
+                if rc: m["reasoning_content"] = rc
             if isinstance(m.get("content"), str) and m["content"]:
                 m["content"] = _strip_inline_thinking(m["content"])
-            # Strip tool_calls to prevent cross-model pattern trigger
-            # Keep content as-is so the conversation context is preserved
             if "tool_calls" in m:
-                tc_names = [tc["function"]["name"] for tc in m["tool_calls"] if isinstance(tc, dict)]
-                if tc_names and not m.get("content"):
-                    m["content"] = f"[Called tools: {', '.join(tc_names)}]"
-                m.pop("tool_calls", None)
+                for tc in m["tool_calls"]:
+                    if isinstance(tc, dict):
+                        tc["id"] = f"call_{abs(hash(tc.get('id', '')))}"[:30]
         elif m.get("role") == "tool":
             m = {**m}
-            m["role"] = "user"
-            m["content"] = f"[Tool result: {m.get('content', '')}]"
-            m.pop("tool_call_id", None)
+            tid = m.get("tool_call_id")
+            if tid:
+                m["tool_call_id"] = f"call_{abs(hash(tid))}"[:30]
         cleaned.append(m)
     return cleaned
 
