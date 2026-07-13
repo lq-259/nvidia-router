@@ -169,7 +169,11 @@ async def route_chat(
     session_id: Optional[str] = None,
     thinking_mode: ThinkingMode = ThinkingMode.normalize,
 ) -> dict:
-    """Route via concurrent probe + full request."""
+    """Route via concurrent probe + full request.
+
+    If the conversation contains tool calls from a previous model switch,
+    we skip the probe and re-use the same model to prevent tool chain overflow.
+    """
     logger.info(f"route_chat: session={session_id}, msgs={len(body.get('messages',[]))}, has_tools={'tools' in body}")
     if len(body.get('messages', [])) > 50:
         logger.warning(f"route_chat: large context ({len(body['messages'])} msgs), may need longer timeout")
@@ -178,6 +182,13 @@ async def route_chat(
         logger.info(f"route_chat: sticky hit -> {sticky}")
     probe_models = _build_probe_models(sticky)
     sample_msg = _extract_sample(body)
+
+    # Detect active tool chain: if history has tool_calls, keep the same model
+    msgs = body.get("messages", [])
+    has_tool_history = any(m.get("role") == "tool" or (m.get("role") == "assistant" and m.get("tool_calls")) for m in msgs)
+    if has_tool_history and sticky:
+        logger.info(f"route_chat: tool chain active, re-using sticky model {sticky}")
+        probe_models = [probe_models[0]] if probe_models else probe_models
 
     async with httpx.AsyncClient() as client:
         if sticky:
