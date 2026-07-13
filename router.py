@@ -127,6 +127,9 @@ async def _try_single(
         request_body.pop("stream")
     if model.extra_body:
         request_body = {**request_body, **model.extra_body}
+    else:
+        for key in ("chat_template_kwargs", "reasoning_effort"):
+            request_body.pop(key, None)
 
     # Sanitize messages to prevent cross-model reasoning pollution
     request_body["messages"] = _sanitize_messages(request_body.get("messages", []), model.name)
@@ -451,6 +454,9 @@ async def _stream_from_model(
     request_body = {**body, "model": model.model_id, "stream": True}
     if model.extra_body:
         request_body = {**request_body, **model.extra_body}
+    else:
+        for key in ("chat_template_kwargs", "reasoning_effort"):
+            request_body.pop(key, None)
     request_body["messages"] = _sanitize_messages(request_body.get("messages", []), model.name)
 
     logger.info(f"Streaming from {model.name} key={model.api_key[:12]}...")
